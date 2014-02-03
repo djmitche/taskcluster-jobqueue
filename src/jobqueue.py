@@ -263,7 +263,7 @@ def extract_post_data(environ):
     return data
 
 class JobQueue(object):
-    def __init__(self, dsn, rabbitmq_host, external_addr):
+    def __init__(self, dsn, mq_url, external_addr):
         # map request handler to request path
         self.urlpatterns = (
             ('/0.1.0/job/new(/)?$', JobQueue.job_new),
@@ -279,7 +279,7 @@ class JobQueue(object):
         self.dsn = dsn
 
         # rabbitmq (configuration is parsed out from the url)
-        amqp_config = urllib.parse.urlparse(rabbitmq_host)
+        amqp_config = urllib.parse.urlparse(mq_url)
 
         print(amqp_config.path[1:] or '/');
 
@@ -472,8 +472,8 @@ class JobQueue(object):
         self.rabbit_chan.queue_purge(queue='jobs')
 
 class Application(object):
-    def __init__(self, dsn, rabbitmq_host, external_addr, reset):
-        self.job_queue = JobQueue(dsn, rabbitmq_host, external_addr)
+    def __init__(self, dsn, mq_url, external_addr, reset):
+        self.job_queue = JobQueue(dsn, mq_url, external_addr)
         if reset:
             self.job_queue.reset()
 
@@ -493,13 +493,13 @@ def main():
                         help="Externally accessible ip address: host(:port)")
     parser.add_argument('--port', type=int, default=8314,
                         help="Port on which to listen")
-    parser.add_argument('--rabbitmq-host', default='amqp://guest:guest@127.0.0.1:5672/',
-                        help="RabbitMQ server host(:port)")
+    parser.add_argument('--mq', default='amqp://guest:guest@127.0.0.1:5672/',
+                        help="URL for RabbitMQ: amqp://user:pass@host:port/")
     parser.add_argument('--reset', action='store_true',
                         help="Clear database and purge message queue")
     args = parser.parse_args()
 
-    app = Application(args.dsn, args.rabbitmq_host, args.external_addr, args.reset)
+    app = Application(args.dsn, args.mq, args.external_addr, args.reset)
     httpd = make_server('0.0.0.0', args.port, app)
     httpd.serve_forever()
 
