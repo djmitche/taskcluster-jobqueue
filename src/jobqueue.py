@@ -1,4 +1,5 @@
-import amqp
+import kombu
+import kombu.pools
 from datetime import datetime
 import json
 import os
@@ -279,22 +280,18 @@ class JobQueue(object):
         self.dsn = dsn
 
         # rabbitmq (configuration is parsed out from the url)
-        amqp_config = urllib.parse.urlparse(mq_url)
-
-        print(amqp_config.path[1:] or '/');
-
-        self.rabbit_conn = amqp.Connection(
-                host=amqp_config.hostname,
-                userid=amqp_config.username,
-                password=amqp_config.password,
-                virtual_host=amqp_config.path[1:] or '/');
-
-        self.rabbit_chan = self.rabbit_conn.channel()
+        self.mq_conn = kombu.Connection(mq_url)
+        self.rabbit_chan = self.mq_conn.channel()
 
         # TODO: support multiple queues, defined somewhere else
-        self.rabbit_chan.queue_declare(queue="jobs", durable=False, exclusive=False, auto_delete=False)
-        self.rabbit_chan.exchange_declare(exchange="jobs_xchg", type="direct", durable=False, auto_delete=False)
-        self.rabbit_chan.queue_bind(queue="jobs", exchange="jobs_xchg", routing_key="jobs")
+        self.mq_exchange = kombu.Exchange('jobs_xchg', type='direct', durable=False, auto_delete=False)
+        self.mq_queue = kombu.Queue("jobs", self.mq_exchange, routing_key="jobs",
+                                    durable=False, exclusive=False, auto_delete=False)
+
+        # declare the queues and exchanges right off
+        with self.mq_conn as conn:
+            conn.declare(self.mq_exchange)
+            conn.declare(self.mq_queue)
 
         self.external_addr = external_addr
 
@@ -356,10 +353,14 @@ class JobQueue(object):
                     'claim': "http://{}/0.1.0/{}/claim".format(self.external_addr, job.job_id),
                     'finish': "http://{}/0.1.0/{}/finish".format(self.external_addr, job.job_id)}
 
-        msg = amqp.Message(json.dumps(msg_dict))
-        msg.expiration = job.max_pending_seconds*1000  #milliseconds
+        expiration_ms = job.max_pending_seconds*1000  #milliseconds
 
-        self.rabbit_chan.basic_publish(msg, exchange="jobs_xchg", routing_key="jobs")
+        with self.mq_conn as conn:
+            conn.publish(msg_dict,
+                         exchange=self.mq_exchange,
+                         declare=[self.mq_exchange, self.mq_queue],
+                         routing_key='jobs',
+                         expire=str(expiration_ms))
 
         response_body = '{"job_id": "' + str(job.job_id) + '"}'
         return make200(start_response, response_body)
@@ -469,7 +470,8 @@ class JobQueue(object):
         dbconn.close()
 
         # purge message queues
-        self.rabbit_chan.queue_purge(queue='jobs')
+        with self.mq_conn as conn:
+            self.mq_queue(conn).purge()
 
 class Application(object):
     def __init__(self, dsn, mq_url, external_addr, reset):

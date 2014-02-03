@@ -1,2 +1,3 @@
 amqp==1.4.2
+kombu=3.0.11
 psycopg2==2.5.2
